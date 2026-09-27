@@ -1,0 +1,4 @@
+# Pinned versions for the oracle build (sourced by build.sh).
+CORE_COMMIT=46779fbe40e6a9bd8967f5dc6a03f4eaa6550d57
+CARDSCRIPTS_COMMIT=9d1d01091f060d02cc9304f7a4efab96c186f113
+LUA_VERSION=5.4.7

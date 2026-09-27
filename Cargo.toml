@@ -1,0 +1,20 @@
+[package]
+name = "ygo-engine"
+version = "0.1.0"
+edition = "2021"
+description = "A faithful port of ocgcore (edo9300/ygopro-core) to Rust"
+license = "AGPL-3.0-or-later"
+# Never publish: this is a derivative work with its own obligations, and
+# releasing it is a decision to be made deliberately, not by `cargo publish`.
+publish = false
+
+[dependencies]
+
+# The engine is built to be searched, and the bench
+# (`examples/bench.rs`) is measured on this profile: whole-program
+# optimisation, one codegen unit, and no unwinding tables — none of which
+# changes a result, all of which the profile-led optimisation pass counts on.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"

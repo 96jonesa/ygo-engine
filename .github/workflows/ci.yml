@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Build ocgcore (pinned)
+        run: tools/oracle/build.sh
+      - name: Thirty games against ocgcore
+        run: PYTHON=python PORT_ORACLE_FUZZ=30 cargo test --test oracle_fuzz
+      - name: Constant tables
+        run: python tools/check_constants.py

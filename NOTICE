@@ -1,0 +1,39 @@
+ygo-engine
+==========
+
+A port of edo9300's YGOPro script engine (ocgcore) to Rust.
+
+This is a derivative work of AGPL-3.0 software and is therefore licensed
+under the GNU Affero General Public License, version 3 or later. See
+LICENSE for the full text.
+
+
+Upstream, and the chain of attribution
+--------------------------------------
+
+edo9300's YGOPro script engine (ocgcore)
+    https://github.com/edo9300/ygopro-core
+    Copyright (C) 2019-2026  Edoardo Lolletti (edo9300)
+    See that project's version history for a full list of authors.
+    Licensed AGPL-3.0-or-later.
+
+    itself modified from Fluorohydride's YGOPro script engine
+        https://github.com/Fluorohydride/ygopro-core
+        lead maintainers DailyShana, mercury233
+        Copyright (c) 2015  Argon Sun (Fluorohydride)
+        Licensed MIT.
+
+Card scripts, where used, come from
+    https://github.com/ProjectIgnis/CardScripts
+    Licensed AGPL-3.0.
+
+Lua is Copyright (C) 1994-2019 Lua.org, PUC-Rio, licensed MIT.
+
+
+A note on obligations
+---------------------
+
+The AGPL reaches users over a network, not only recipients of a binary
+(section 13). A program that links this crate in-process forms a combined
+work and is AGPL-covered; if that program is offered to users over a
+network, those users are entitled to its corresponding source.
