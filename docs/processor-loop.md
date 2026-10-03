@@ -12225,10 +12225,17 @@ order; life points, turn, phase; the chain; the battle in progress; the
 summon counts and zone masks; the public effect layer — every granted
 effect, and every printed effect of a public card — sorted so that
 effect ids play no part; and the processor's control-flow skeleton, each
-queued unit's kind and step, never its payload. The private part holds
-the viewer's hand in order, their Extra Deck, and every hidden card
-elsewhere whose identity they alone know — their own set cards, a card
-revealed to them that the other player has not seen the reveal of. The
+queued unit's kind and step, never the rest of its payload — except the
+card the unit operates on (the card being summoned, set, moved, equipped
+or replaced, or whose effect is executing), whose place is public. The
+private part holds the viewer's hand in order, their Extra Deck, every
+hidden card elsewhere whose identity they alone know — their own set
+cards, a card revealed to them that the other player has not seen the
+reveal of — and the identity of each queued unit's card where they know
+it. That last is what separates two states that differ only in which
+hand card a pending set is carrying: at the zone question the card is
+still in hand, so nothing else in the observation tells them apart, yet
+the player who chose it knows which it is. The
 question is projected too, with card identities shown where the viewer
 knows them and the viewer's partial picks alongside.
 
