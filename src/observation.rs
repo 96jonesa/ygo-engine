@@ -367,8 +367,11 @@ pub struct Public {
     /// The public effect layer, sorted.
     pub effects: Vec<EffectView>,
     /// The processor's control-flow skeleton: each queued unit's kind and
-    /// step, front first, never its payload.
-    pub queue: Vec<(String, u16)>,
+    /// step, front first, and where its subject card is (the card being
+    /// summoned, set, moved, and so on: [`subject`]). The subject's
+    /// identity is not here; it is in [`Private::subjects`] for a viewer
+    /// who knows it.
+    pub queue: Vec<(String, u16, Option<Place>)>,
 }
 
 /// What the viewer alone knows: their hand and Extra Deck, and every hidden
@@ -383,6 +386,10 @@ pub struct Private {
     pub extra: Vec<u32>,
     /// `(where, code)`, sorted by place.
     pub known: Vec<(Place, u32)>,
+    /// `(queue index, code)` for each queued unit whose subject card the
+    /// viewer knows: a card being set from their own hand is theirs to know
+    /// while the question about it is pending, before it reaches the field.
+    pub subjects: Vec<(usize, u32)>,
 }
 
 /// The pending question as the viewer sees it, with the viewer's partial
@@ -740,12 +747,21 @@ pub fn observe(
     }
     effects.sort();
 
-    let queue: Vec<(String, u16)> = f
+    let units: Vec<&crate::processor::Unit> = f
         .core
         .units
         .iter()
         .chain(f.core.subunits.iter().rev())
-        .map(|u| (kind_name(&u.kind), u.step))
+        .collect();
+    let queue: Vec<(String, u16, Option<Place>)> = units
+        .iter()
+        .map(|u| {
+            (
+                kind_name(&u.kind),
+                u.step,
+                subject(&u.kind).map(|c| place_of(f, c)),
+            )
+        })
         .collect();
 
     let public = Public {
@@ -795,11 +811,27 @@ pub fn observe(
         .map(|c| (place_of(f, c), f.cards[c].data.code))
         .collect();
     known.sort_unstable();
+    // The identity of each queued unit's subject, where the viewer knows it:
+    // a public card, one the knowledge model says they know, or one in their
+    // own hand or Extra Deck.
+    let subjects: Vec<(usize, u32)> = units
+        .iter()
+        .enumerate()
+        .filter_map(|(i, u)| {
+            let c = subject(&u.kind)?;
+            let cur = &f.cards[c].current;
+            let own_pile =
+                cur.controller == viewer && cur.location & (location::HAND | location::EXTRA) != 0;
+            (own_pile || is_public(&f.cards[c]) || knowledge.knows(viewer, c))
+                .then(|| (i, f.cards[c].data.code))
+        })
+        .collect();
     let private = Private {
         viewer,
         hand,
         extra,
         known,
+        subjects,
     };
 
     let question = question.map(|q| question_view(f, q, partial, &card_ref));
@@ -808,6 +840,38 @@ pub fn observe(
         public,
         private,
         question,
+    }
+}
+
+/// The card a queued unit operates on, where its payload names one: the
+/// card being summoned, set, moved to the field, equipped, released or
+/// destroyed by a replacement, or whose effect is being executed. The
+/// observation records where it is for everyone and what it is for a viewer
+/// who knows it; without it, two states that differ only in which card a
+/// pending operation is working on would look alike to the player who chose
+/// that card.
+fn subject(kind: &crate::processor::Kind) -> Option<CardId> {
+    use crate::processor::Kind as K;
+    match kind {
+        K::ExecuteCost { subject, .. }
+        | K::ExecuteTarget { subject, .. }
+        | K::ExecuteOperation { subject, .. } => *subject,
+        K::SelectEffectYesNo { card, .. } | K::SelfDestroyUnique { card, .. } => Some(*card),
+        K::RemoveCounter { pcard, .. } => *pcard,
+        K::OperationReplace { target, .. } => *target,
+        K::SelectTribute { target, .. }
+        | K::Equip { target, .. }
+        | K::DestroyReplace { target, .. }
+        | K::ReleaseReplace { target, .. }
+        | K::SummonRule { target, .. }
+        | K::SpSummonRule { target, .. }
+        | K::SpSummonStep { target, .. }
+        | K::FlipSummon { target, .. }
+        | K::SpellSet { target, .. }
+        | K::MonsterSet { target, .. }
+        | K::MoveToField { target, .. }
+        | K::SendToReplace { target, .. } => Some(*target),
+        _ => None,
     }
 }
 

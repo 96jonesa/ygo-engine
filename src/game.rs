@@ -2789,6 +2789,76 @@ mod observation_tests {
         assert_ne!(a.infoset_key(1), b.infoset_key(1), "the owner knows which");
     }
 
+    /// **A pending operation's card is the chooser's to know.** Player 0
+    /// is setting one of two different hand cards and is asked where: at the
+    /// zone question the card is still in hand, and the queued set and move
+    /// carry it. The two histories
+    /// differ only in which card the queued set carries: the setter, who
+    /// chose it, keys them apart; the opponent and the public skeleton,
+    /// which see a card leave a hand of two either way, key them the same.
+    #[test]
+    fn a_pending_set_keys_by_its_card_for_the_setter_only() {
+        let setting = |which: usize| {
+            let mut f = Field::new(8000);
+            let hand: Vec<CardId> = [11, 12]
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    card(
+                        &mut f,
+                        0,
+                        c,
+                        location::HAND,
+                        i as u32,
+                        position::FACEDOWN_DEFENSE,
+                    )
+                })
+                .collect();
+            card(&mut f, 1, 21, location::HAND, 0, position::FACEDOWN_DEFENSE);
+            f.emplace_at(
+                Kind::MonsterSet {
+                    setplayer: 0,
+                    target: hand[which],
+                    ignore_count: false,
+                    min_tribute: 0,
+                    zone: 0x1f,
+                    state: Box::default(),
+                },
+                1,
+            );
+            f.emplace(Kind::SelectYesNo {
+                player: 0,
+                description: 0,
+            });
+            game(f)
+        };
+        let (mut a, mut b) = (setting(0), setting(1));
+        assert_eq!(a.player_to_act(), Actor::Player(0));
+        assert_ne!(
+            a.infoset_key(0),
+            b.infoset_key(0),
+            "the setter knows which card it is setting"
+        );
+        assert_eq!(a.infoset_key(1), b.infoset_key(1), "the opponent does not");
+        assert_eq!(a.public_key(), b.public_key(), "nor does the public");
+        let (oa, ob) = (a.observation(0), b.observation(0));
+        assert_eq!(oa.public.queue, ob.public.queue);
+        assert!(
+            oa.public.queue.iter().any(|(_, _, at)| at.is_some()),
+            "the skeleton says where the subject is"
+        );
+        assert!(matches!(
+            a.question(),
+            Some(Message::SelectPlace { player: 0, .. })
+        ));
+        let codes = |o: &crate::observation::Observation| -> Vec<u32> {
+            o.private.subjects.iter().map(|&(_, code)| code).collect()
+        };
+        assert_eq!(codes(&oa), vec![11, 11], "the queued set and move");
+        assert_eq!(codes(&ob), vec![12, 12]);
+        assert!(a.observation(1).private.subjects.is_empty());
+    }
+
     /// **A set from a hand of one code stays known.** Two copies of the
     /// same card shown: whichever was set, the viewer can name it.
     #[test]
