@@ -19,6 +19,13 @@
 //! from the ambiguous-departure work) would narrow the permutation later;
 //! the interface leaves room.
 //!
+//! A caller that weighs worlds itself (a belief over the hidden cards that
+//! is not uniform) builds them with [`Game::determinize_with`]: given an
+//! identity for each card [`Game::hidden`] lists, it checks the assignment
+//! is a completion (the hidden multiset, each seat's code legal for it) and
+//! builds that world. [`Game::determinize`] is the same construction with
+//! the assignment drawn uniformly.
+//!
 //! Two legality constraints on the permutation, because a world the engine
 //! could not have reached is not a completion: a face-down card in the
 //! monster zone is a monster, by preference one that could have been set
@@ -106,44 +113,88 @@ fn shuffle<T>(v: &mut [T], rng: &mut Xoshiro256StarStar) {
     }
 }
 
+/// The cards a viewer cannot identify, and the identities they hold: what
+/// a world may permute. The other player's hidden cards not known to the
+/// viewer, by the seat class that constrains them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hidden {
+    /// Face-down in the monster zone: each must take a monster.
+    pub monster_seats: Vec<CardId>,
+    /// Set in the spell and trap zone: each must take a spell or trap.
+    pub spell_trap_seats: Vec<CardId>,
+    /// In the hand or the deck: anything.
+    pub free: Vec<CardId>,
+    /// The identities those cards hold between them, as printed codes,
+    /// sorted: what any completion must hand out, each exactly once.
+    pub codes: Vec<u32>,
+}
+
+impl Hidden {
+    /// Every card in the permutation, in seat-class order.
+    pub fn cards(&self) -> impl Iterator<Item = CardId> + '_ {
+        self.monster_seats
+            .iter()
+            .chain(&self.spell_trap_seats)
+            .chain(&self.free)
+            .copied()
+    }
+}
+
 impl Game {
+    /// What `viewer` cannot identify: the cards a world may re-identify,
+    /// and the identities to share among them.
+    pub fn hidden(&self, viewer: u8) -> Hidden {
+        use crate::board::{location, position};
+        let other = 1 - viewer;
+        let (mut monster_seats, mut spell_trap_seats, mut free) =
+            (Vec::new(), Vec::new(), Vec::new());
+        let f = self.field();
+        for (c, card) in f.cards.iter().enumerate() {
+            let cur = &card.current;
+            if cur.controller != other || self.knowledge().knows(viewer, c) {
+                continue;
+            }
+            match cur.location {
+                location::HAND | location::DECK => free.push(c),
+                location::MZONE if cur.position & position::FACEDOWN != 0 => monster_seats.push(c),
+                location::SZONE if cur.position & position::FACEDOWN != 0 => {
+                    spell_trap_seats.push(c)
+                }
+                _ => {}
+            }
+        }
+        let mut codes: Vec<u32> = monster_seats
+            .iter()
+            .chain(&spell_trap_seats)
+            .chain(&free)
+            .map(|&c| f.cards[c].data.code)
+            .collect();
+        codes.sort_unstable();
+        Hidden {
+            monster_seats,
+            spell_trap_seats,
+            free,
+            codes,
+        }
+    }
+
     /// A world the viewer cannot tell from this one — see the module note.
     /// The returned game is at the same node, with the same question
     /// pending, the same observation and legal actions for `viewer`, and a
     /// generator seeded from `seed`; a search plays it out from here.
     pub fn determinize(&self, viewer: u8, seed: [u64; 4]) -> Game {
-        use crate::board::{location, position};
-        let mut g = self.clone();
-        let other = 1 - viewer;
         let mut rng = Xoshiro256StarStar::new(seed);
+        let hidden = self.hidden(viewer);
+        let f = self.field();
 
-        // The other player's hidden cards the viewer does not know, by the
-        // seat they must be legal in.
-        let (mut mzone, mut szone, mut free): (Vec<CardId>, Vec<CardId>, Vec<CardId>) =
-            (Vec::new(), Vec::new(), Vec::new());
-        {
-            let f = g.field();
-            for (c, card) in f.cards.iter().enumerate() {
-                let cur = &card.current;
-                if cur.controller != other || self.knowledge().knows(viewer, c) {
-                    continue;
-                }
-                match cur.location {
-                    location::HAND | location::DECK => free.push(c),
-                    location::MZONE if cur.position & position::FACEDOWN != 0 => mzone.push(c),
-                    location::SZONE if cur.position & position::FACEDOWN != 0 => szone.push(c),
-                    _ => {}
-                }
-            }
-        }
-        // The identities those cards hold, as a pool, partitioned by what
-        // each seat class may take.
+        // The identities, as a pool, partitioned by what each seat class
+        // may take.
         let mut monsters: Vec<CardData> = Vec::new();
         let mut big_monsters: Vec<CardData> = Vec::new();
         let mut spells_traps: Vec<CardData> = Vec::new();
         let mut rest: Vec<CardData> = Vec::new();
-        for &c in mzone.iter().chain(szone.iter()).chain(free.iter()) {
-            let d = g.field().cards[c].data.clone();
+        for c in hidden.cards() {
+            let d = f.cards[c].data.clone();
             if may_sit_face_down_in_mzone(&d) {
                 monsters.push(d);
             } else if is_monster(&d) {
@@ -158,7 +209,7 @@ impl Game {
         shuffle(&mut big_monsters, &mut rng);
         shuffle(&mut spells_traps, &mut rng);
         let mut assignment: Vec<(CardId, CardData)> = Vec::new();
-        for &c in &mzone {
+        for &c in &hidden.monster_seats {
             // The world where a hidden face-down monster was set with
             // tributes is sampled only when nothing smaller is left.
             let d = monsters
@@ -167,7 +218,7 @@ impl Game {
                 .expect("a monster for every face-down monster");
             assignment.push((c, d));
         }
-        for &c in &szone {
+        for &c in &hidden.spell_trap_seats {
             assignment.push((
                 c,
                 spells_traps
@@ -180,10 +231,83 @@ impl Game {
         pool.append(&mut spells_traps);
         pool.append(&mut rest);
         shuffle(&mut pool, &mut rng);
-        for &c in &free {
+        for &c in &hidden.free {
             assignment.push((c, pool.pop().expect("an identity for every hidden card")));
         }
         debug_assert!(pool.is_empty());
+        self.world(viewer, assignment, &mut rng)
+    }
+
+    /// The world in which the viewer's unidentified cards (`hidden(viewer)`)
+    /// hold the given identities: `assignment` names a printed code for
+    /// every one of those cards, the codes being exactly the hidden
+    /// multiset, each seat's code legal for it (a monster face-down in the
+    /// monster zone, a spell or trap set in the spell and trap zone). The
+    /// viewer's own deck order and the generator are drawn from `seed`, as
+    /// [`Game::determinize`] draws them. For a search that weighs worlds
+    /// itself rather than sampling them uniformly.
+    pub fn determinize_with(
+        &self,
+        viewer: u8,
+        assignment: &[(CardId, u32)],
+        seed: [u64; 4],
+    ) -> Result<Game, String> {
+        let hidden = self.hidden(viewer);
+        let f = self.field();
+        let mut by_card: std::collections::HashMap<CardId, u32> = std::collections::HashMap::new();
+        for &(c, code) in assignment {
+            if by_card.insert(c, code).is_some() {
+                return Err(format!("card {c} is assigned twice"));
+            }
+        }
+        let mut given: Vec<u32> = Vec::with_capacity(assignment.len());
+        let mut out: Vec<(CardId, CardData)> = Vec::with_capacity(assignment.len());
+        // An identity's data, from a hidden card that holds that code now.
+        let data_of = |code: u32| -> Option<CardData> {
+            hidden
+                .cards()
+                .find(|&c| f.cards[c].data.code == code)
+                .map(|c| f.cards[c].data.clone())
+        };
+        for c in hidden.cards() {
+            let code = *by_card
+                .get(&c)
+                .ok_or_else(|| format!("card {c} is hidden from the viewer but not assigned"))?;
+            let d = data_of(code)
+                .ok_or_else(|| format!("code {code} is not among the hidden identities"))?;
+            if hidden.monster_seats.contains(&c) && !is_monster(&d) {
+                return Err(format!(
+                    "card {c} is a face-down monster; {code} is not a monster"
+                ));
+            }
+            if hidden.spell_trap_seats.contains(&c) && !is_spell_or_trap(&d) {
+                return Err(format!(
+                    "card {c} is a set spell or trap; {code} is neither"
+                ));
+            }
+            given.push(code);
+            out.push((c, d));
+        }
+        if out.len() != by_card.len() {
+            return Err("the assignment names a card the viewer can identify".into());
+        }
+        given.sort_unstable();
+        if given != hidden.codes {
+            return Err("the assignment's codes are not the hidden multiset".into());
+        }
+        let mut rng = Xoshiro256StarStar::new(seed);
+        Ok(self.world(viewer, out, &mut rng))
+    }
+
+    /// Apply an assignment of identities, reshuffle the viewer's own deck
+    /// and reseed the generator, all from `rng`.
+    fn world(
+        &self,
+        viewer: u8,
+        assignment: Vec<(CardId, CardData)>,
+        rng: &mut Xoshiro256StarStar,
+    ) -> Game {
+        let mut g = self.clone();
         for (c, d) in assignment {
             if g.field().cards[c].data.code != d.code {
                 g.field_mut().reidentify(c, d);
@@ -193,7 +317,7 @@ impl Game {
         // The viewer's own deck: its contents are the viewer's, its order
         // is not.
         let mut order = g.field().players[usize::from(viewer)].main.clone();
-        shuffle(&mut order, &mut rng);
+        shuffle(&mut order, rng);
         let imposed = g.field_mut().set_deck_order(viewer, &order);
         debug_assert!(imposed);
 
@@ -340,6 +464,179 @@ mod tests {
             }
         }
         assert!(samples >= 20, "{samples}");
+    }
+
+    /// Positions from random pool games where the player to act faces
+    /// hidden cards: `(game, viewer)`.
+    fn positions() -> Vec<(Game, u8)> {
+        let mut out = Vec::new();
+        for game in 0..6u64 {
+            let deck = pool_deck(game);
+            for &depth in &[3usize, 40, 120] {
+                let mut g = Game::new([deck.clone(), deck.clone()], [1, 2, 3, game]);
+                let mut rng = RandomPolicy::new(400 + game);
+                if !at_node(&mut g, &mut rng, depth) {
+                    continue;
+                }
+                if let Actor::Player(p) = g.player_to_act() {
+                    out.push((g, p));
+                }
+            }
+        }
+        assert!(out.len() >= 10, "{} positions", out.len());
+        out
+    }
+
+    /// The refusal, where a world was expected not to be built.
+    fn refused(r: Result<Game, String>) -> String {
+        match r {
+            Ok(_) => panic!("the assignment was accepted"),
+            Err(e) => e,
+        }
+    }
+
+    /// The assignment a world holds: each hidden card's code there.
+    fn assignment_in(world: &Game, hidden: &Hidden) -> Vec<(CardId, u32)> {
+        hidden
+            .cards()
+            .map(|c| (c, world.field().cards[c].data.code))
+            .collect()
+    }
+
+    mod hidden {
+        use super::*;
+
+        /// **The hidden cards are the other player's unknown ones, and
+        /// their codes are the hidden multiset.**
+        #[test]
+        fn lists_the_cards_and_codes_a_world_may_permute() {
+            for (g, p) in positions() {
+                let h = g.hidden(p);
+                assert_eq!(h.cards().count(), h.codes.len());
+                let mut from_cards: BTreeMap<u32, usize> = BTreeMap::new();
+                for &code in &h.codes {
+                    *from_cards.entry(code).or_default() += 1;
+                }
+                assert_eq!(from_cards, hidden_codes(&g, p));
+                for c in h.cards() {
+                    assert_eq!(g.field().cards[c].current.controller, 1 - p);
+                    assert!(!g.knowledge().knows(p, c));
+                }
+            }
+        }
+    }
+
+    mod determinize_with {
+        use super::*;
+
+        /// **The world holds exactly the assignment, and the viewer cannot
+        /// tell it from the original.** The assignment is read off a
+        /// sampled world, so it is a legal completion.
+        #[test]
+        fn gives_each_hidden_card_its_assigned_identity() {
+            let mut checked = 0;
+            for (mut g, p) in positions() {
+                let h = g.hidden(p);
+                let sample = g.determinize(p, [9, 9, 9, checked]);
+                let a = assignment_in(&sample, &h);
+                let mut w = g
+                    .determinize_with(p, &a, [1, 2, 3, 4])
+                    .expect("a legal completion");
+                assert_eq!(assignment_in(&w, &h), a);
+                assert_eq!(w.infoset_key(p), g.infoset_key(p), "the viewer's key");
+                assert_eq!(w.public_key(), g.public_key());
+                assert_eq!(w.legal_actions(), g.legal_actions());
+                assert_eq!(hidden_codes(&w, p), hidden_codes(&g, p));
+                checked += 1;
+            }
+            assert!(checked >= 10);
+        }
+
+        /// **The original identities are a completion too**, and give
+        /// back the original hidden cards.
+        #[test]
+        fn accepts_the_true_assignment() {
+            for (g, p) in positions() {
+                let h = g.hidden(p);
+                let truth = assignment_in(&g, &h);
+                let w = g.determinize_with(p, &truth, [5, 5, 5, 5]).unwrap();
+                assert_eq!(assignment_in(&w, &h), truth);
+            }
+        }
+
+        /// **Anything but a legal completion is refused**: a card left out,
+        /// a card named twice, a card the viewer can identify, a code
+        /// outside the hidden multiset, and a seat given an identity it
+        /// cannot hold.
+        #[test]
+        fn refuses_an_assignment_that_is_not_a_completion() {
+            let mut seats_tested = 0;
+            for (g, p) in positions() {
+                let h = g.hidden(p);
+                let truth = assignment_in(&g, &h);
+                if truth.len() < 2 {
+                    continue;
+                }
+                let seed = [1, 1, 1, 1];
+                assert!(refused(g.determinize_with(p, &truth[1..], seed)).contains("not assigned"));
+                let mut twice = truth.clone();
+                twice.push(truth[0]);
+                assert!(refused(g.determinize_with(p, &twice, seed)).contains("twice"));
+                let own = g
+                    .field()
+                    .cards
+                    .iter()
+                    .position(|c| c.current.controller == p)
+                    .expect("the viewer has cards");
+                let mut foreign = truth.clone();
+                foreign.push((own, truth[0].1));
+                assert!(refused(g.determinize_with(p, &foreign, seed)).contains("can identify"));
+                let mut alien = truth.clone();
+                alien[0].1 = u32::MAX;
+                assert!(refused(g.determinize_with(p, &alien, seed)).contains("not among"));
+                // Two codes swapped between a face-down monster and a free
+                // card holding a spell or trap: the multiset holds, the
+                // seat does not.
+                if let Some(&m) = h.monster_seats.first() {
+                    let st = h
+                        .free
+                        .iter()
+                        .copied()
+                        .find(|&c| is_spell_or_trap(&g.field().cards[c].data));
+                    if let Some(st) = st {
+                        let mut bad = truth.clone();
+                        let (im, is) = (
+                            bad.iter().position(|x| x.0 == m).unwrap(),
+                            bad.iter().position(|x| x.0 == st).unwrap(),
+                        );
+                        let (cm, cs) = (bad[im].1, bad[is].1);
+                        bad[im].1 = cs;
+                        bad[is].1 = cm;
+                        assert!(
+                            refused(g.determinize_with(p, &bad, seed)).contains("not a monster")
+                        );
+                        seats_tested += 1;
+                    }
+                }
+                // A code repeated in place of another: every card is named
+                // and every code is hidden, but the multiset is wrong.
+                if let Some(j) = truth.iter().position(|x| x.1 != truth[0].1) {
+                    let mut skewed = truth.clone();
+                    skewed[j].1 = truth[0].1;
+                    let e = refused(g.determinize_with(p, &skewed, seed));
+                    assert!(
+                        e.contains("multiset")
+                            || e.contains("not a monster")
+                            || e.contains("neither"),
+                        "{e}"
+                    );
+                }
+            }
+            assert!(
+                seats_tested >= 1,
+                "no position had a face-down monster to test"
+            );
+        }
     }
 
     /// **Play continues on a sampled world.** The re-registered scripts

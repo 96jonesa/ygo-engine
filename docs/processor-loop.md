@@ -12480,6 +12480,15 @@ of its belief model. On the port the seam is `Game::determinize(viewer,
 seed) -> Game` in `src/determinize.rs`, over one new field operation,
 `Field::reidentify(card, data)`.
 
+`Game::determinize_with(viewer, assignment, seed)` is the same
+construction from a given assignment instead of a uniform draw.
+`Game::hidden(viewer)` lists the cards and the identity multiset, and the
+assignment is checked to be a completion before the world is built: every
+hidden card named once, exactly the hidden codes, a monster in each
+face-down monster seat, a spell or trap in each set seat. `determinize`
+now draws an assignment and applies it with the same code, and its samples
+are bit-for-bit what they were before the split.
+
 ### The belief model, version one
 
 Uniform over consistent completions. What the viewer does not know, in the port's

@@ -48,6 +48,11 @@ needs (`src/game.rs`, `src/observation.rs`, `src/determinize.rs`,
 - **`determinize(viewer, seed)`**: a world the viewer cannot tell from the
   real one, with the hidden cards they do not know reassigned uniformly
   among consistent completions. The belief seam for PIMC and IS-MCTS.
+- **`hidden(viewer)` and `determinize_with(viewer, assignment, seed)`**: the
+  cards the viewer cannot identify and the identities they hold, and the
+  world in which they hold a given assignment (checked to be a legal
+  completion). For a search that weighs worlds itself instead of sampling
+  them uniformly.
 - **`rollout(max_moves, seed)`**: a seeded random playout on a copy, to
   the end or to a cap, handing back the result or the cut-off game.
 
