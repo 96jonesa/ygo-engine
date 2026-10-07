@@ -209,22 +209,31 @@ impl Game {
         shuffle(&mut big_monsters, &mut rng);
         shuffle(&mut spells_traps, &mut rng);
         let mut assignment: Vec<(CardId, CardData)> = Vec::new();
+        // A seat class whose own identities run out takes from the rest of
+        // the pool rather than failing. No card in the pool can be set
+        // anywhere but its own class's seat (`no_pool_card_sets_out_of_class`
+        // pins that), so the fallback never fires today; a card that can
+        // (a monster set in a spell and trap zone) makes it fire, and its
+        // seat rules belong here first.
         for &c in &hidden.monster_seats {
             // The world where a hidden face-down monster was set with
             // tributes is sampled only when nothing smaller is left.
             let d = monsters
                 .pop()
                 .or_else(|| big_monsters.pop())
-                .expect("a monster for every face-down monster");
+                .or_else(|| spells_traps.pop())
+                .or_else(|| rest.pop())
+                .expect("an identity for every hidden card");
             assignment.push((c, d));
         }
         for &c in &hidden.spell_trap_seats {
-            assignment.push((
-                c,
-                spells_traps
-                    .pop()
-                    .expect("a spell or trap for every set spell or trap"),
-            ));
+            let d = spells_traps
+                .pop()
+                .or_else(|| rest.pop())
+                .or_else(|| monsters.pop())
+                .or_else(|| big_monsters.pop())
+                .expect("an identity for every hidden card");
+            assignment.push((c, d));
         }
         let mut pool: Vec<CardData> = monsters;
         pool.append(&mut big_monsters);
@@ -532,6 +541,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **No pool card can be set outside its own class's seat.** A
+    /// monster may be set in a spell and trap zone only under
+    /// `EFFECT_MONSTER_SSET` (`Field::is_setable_szone`). `determinize`
+    /// and `determinize_with` assume no hidden card does that: a set spell
+    /// or trap seat holds a spell or trap. Every pool card, initialised in
+    /// a hand, is checked for the effect. A card that grants it fails this
+    /// test, and the seat rules in this module must be extended for it
+    /// (with that card to test against) before the test is relaxed.
+    #[test]
+    fn no_pool_card_sets_out_of_class() {
+        let mut f = Field::new(8000);
+        let mut granting = Vec::new();
+        for &code in POOL.iter() {
+            let mut c = crate::card::Card::with_data(card_data(code).expect("pool data"), 0);
+            c.current.controller = 0;
+            let id = f.new_card(c);
+            f.add_card(0, id, location::HAND, 0, false);
+            f.initialize_card(id);
+            if f.is_affected_by_effect(id, crate::event::code::MONSTER_SSET)
+                .is_some()
+            {
+                granting.push(code);
+            }
+        }
+        // The detection is not blind: a monster given the effect, as a
+        // script grants it, is seen.
+        let control = f.new_card(crate::card::Card::with_data(
+            card_data(POOL[0]).expect("pool data"),
+            0,
+        ));
+        f.add_card(0, control, location::HAND, 0, false);
+        let mut e = crate::effect::Effect::new(
+            crate::effect::effect_type::SINGLE,
+            crate::event::code::MONSTER_SSET,
+        );
+        e.owner = Some(control);
+        e.handler = Some(control);
+        let e = f.new_effect(e);
+        f.cards[control]
+            .single_effect
+            .insert(crate::event::code::MONSTER_SSET, e);
+        f.cards[control].indexer.insert(e);
+        assert!(
+            f.is_affected_by_effect(control, crate::event::code::MONSTER_SSET)
+                .is_some(),
+            "the check must see a granted MONSTER_SSET"
+        );
+        assert!(
+            granting.is_empty(),
+            "{granting:?} may be set in a spell and trap zone as a monster: extend determinize's \
+             seat rules for it first"
+        );
     }
 
     mod determinize_with {
