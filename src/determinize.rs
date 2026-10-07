@@ -28,11 +28,11 @@
 //!
 //! Two legality constraints on the permutation, because a world the engine
 //! could not have reached is not a completion: a face-down card in the
-//! monster zone is a monster, by preference one that could have been set
-//! without tributes (level four or less; a level-five-or-more monster is
-//! placed there only when nothing smaller is left in the pool, which is
-//! the tribute-set world and rare), and a set spell or trap is a spell or
-//! trap. Hands and decks take anything left. A face-down card the viewer
+//! monster zone is a monster, any monster (a level-five-or-more one is a
+//! tribute set, or a card that sets without tributing: whether the history
+//! makes it plausible is a belief's question, not the rules'), and a set
+//! spell or trap is a spell or trap. Hands and decks take anything left.
+//! Within those constraints the sample is uniform. A face-down card the viewer
 //! knows — one they watched turn over — is not in the permutation at all.
 //!
 //! ## Identity, not position
@@ -88,12 +88,6 @@ impl Field {
         c.unique_filter = None;
         self.initialize_card(card);
     }
-}
-
-/// A monster that could have been set without tributes: the preferred
-/// occupant of a hidden face-down monster seat.
-fn may_sit_face_down_in_mzone(d: &CardData) -> bool {
-    is_monster(d) && d.level <= 4
 }
 
 fn is_monster(d: &CardData) -> bool {
@@ -182,6 +176,11 @@ impl Game {
     /// The returned game is at the same node, with the same question
     /// pending, the same observation and legal actions for `viewer`, and a
     /// generator seeded from `seed`; a search plays it out from here.
+    ///
+    /// `seed` is the generator's raw state, so it should be well mixed
+    /// ([`crate::rng::expand_seed`] of a counter is): xoshiro's first draws
+    /// depend on few of its words, and raw seeds that differ in one word
+    /// give correlated samples.
     pub fn determinize(&self, viewer: u8, seed: [u64; 4]) -> Game {
         let mut rng = Xoshiro256StarStar::new(seed);
         let hidden = self.hidden(viewer);
@@ -190,15 +189,12 @@ impl Game {
         // The identities, as a pool, partitioned by what each seat class
         // may take.
         let mut monsters: Vec<CardData> = Vec::new();
-        let mut big_monsters: Vec<CardData> = Vec::new();
         let mut spells_traps: Vec<CardData> = Vec::new();
         let mut rest: Vec<CardData> = Vec::new();
         for c in hidden.cards() {
             let d = f.cards[c].data.clone();
-            if may_sit_face_down_in_mzone(&d) {
+            if is_monster(&d) {
                 monsters.push(d);
-            } else if is_monster(&d) {
-                big_monsters.push(d);
             } else if is_spell_or_trap(&d) {
                 spells_traps.push(d);
             } else {
@@ -206,7 +202,6 @@ impl Game {
             }
         }
         shuffle(&mut monsters, &mut rng);
-        shuffle(&mut big_monsters, &mut rng);
         shuffle(&mut spells_traps, &mut rng);
         let mut assignment: Vec<(CardId, CardData)> = Vec::new();
         // A seat class whose own identities run out takes from the rest of
@@ -216,11 +211,8 @@ impl Game {
         // (a monster set in a spell and trap zone) makes it fire, and its
         // seat rules belong here first.
         for &c in &hidden.monster_seats {
-            // The world where a hidden face-down monster was set with
-            // tributes is sampled only when nothing smaller is left.
             let d = monsters
                 .pop()
-                .or_else(|| big_monsters.pop())
                 .or_else(|| spells_traps.pop())
                 .or_else(|| rest.pop())
                 .expect("an identity for every hidden card");
@@ -231,12 +223,10 @@ impl Game {
                 .pop()
                 .or_else(|| rest.pop())
                 .or_else(|| monsters.pop())
-                .or_else(|| big_monsters.pop())
                 .expect("an identity for every hidden card");
             assignment.push((c, d));
         }
         let mut pool: Vec<CardData> = monsters;
-        pool.append(&mut big_monsters);
         pool.append(&mut spells_traps);
         pool.append(&mut rest);
         shuffle(&mut pool, &mut rng);
@@ -261,8 +251,8 @@ impl Game {
     /// more one included (a tribute set, a card that sets without
     /// tributing, an effect that sets it there). Whether an identity is
     /// *plausible* given the history (no tribute seen, say) is the
-    /// caller's belief to weigh; [`Game::determinize`]'s preference for
-    /// small monsters in those seats is a soft one for the same reason.
+    /// caller's belief to weigh; [`Game::determinize`] is uniform over the
+    /// legal completions for the same reason.
     pub fn determinize_with(
         &self,
         viewer: u8,
@@ -776,6 +766,56 @@ mod tests {
                 "code {code}: {got} of {expected:.1} expected"
             );
         }
+    }
+
+    /// **A face-down monster seat is uniform over the hidden monsters**,
+    /// big ones included: no level preference. At positions where a hidden
+    /// face-down monster shares the pool with monsters of level five or
+    /// more, the share of samples putting a big one there matches their
+    /// share of the hidden monsters.
+    #[test]
+    fn a_face_down_monster_seat_is_uniform_over_the_monsters() {
+        let mut tested = 0;
+        for (g, p) in positions() {
+            let h = g.hidden(p);
+            let Some(&seat) = h.monster_seats.first() else {
+                continue;
+            };
+            let monsters: Vec<u32> = h
+                .cards()
+                .map(|c| &g.field().cards[c].data)
+                .filter(|d| is_monster(d))
+                .map(|d| d.level)
+                .collect();
+            let big = monsters.iter().filter(|&&l| l >= 5).count();
+            if big == 0 || big == monsters.len() {
+                continue;
+            }
+            let expected = big as f64 / monsters.len() as f64;
+            let n = 4000u64;
+            let hits = (0..n)
+                .filter(|&k| {
+                    // Seeded as callers seed it: `expand_seed` mixes all four
+                    // words (raw seeds differing in one word give the
+                    // generator correlated first draws).
+                    g.determinize(p, crate::rng::expand_seed(k)).field().cards[seat]
+                        .data
+                        .level
+                        >= 5
+                })
+                .count() as f64;
+            let share = hits / n as f64;
+            let sd = (expected * (1.0 - expected) / n as f64).sqrt();
+            assert!(
+                (share - expected).abs() < 5.0 * sd,
+                "big monsters in the seat {share:.3}, expected {expected:.3}"
+            );
+            tested += 1;
+        }
+        assert!(
+            tested >= 1,
+            "no position had a face-down monster with big and small monsters hidden"
+        );
     }
 
     /// **A re-identified card carries the new script.** Given another
