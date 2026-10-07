@@ -12504,10 +12504,12 @@ permutation moves nothing in or out.
 
 Two legality constraints on the permutation, because a world the engine
 could not have reached is not a completion. A face-down card in the
-monster zone takes a monster, by preference one that could have been set
-without tributes (level four or less; a bigger monster is placed there
-only when nothing smaller is left in the pool — the tribute-set world,
-rare). A set spell or trap takes a spell or trap. Hands and decks take
+monster zone takes a monster, any monster: a level-five-or-more one is a
+tribute set or a card that sets without tributing, and whether the
+history makes it plausible is a belief's question, not the rules'. (An
+earlier version preferred monsters of level four or less: a level-blind
+guess, wrong exactly after a visible tribute set.) A set spell or trap
+takes a spell or trap. Within those constraints the sample is uniform. Hands and decks take
 anything left. A face-down card the viewer knows — one they watched turn
 over — is not in the permutation at all.
 
