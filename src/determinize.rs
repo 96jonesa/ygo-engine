@@ -246,6 +246,14 @@ impl Game {
     /// viewer's own deck order and the generator are drawn from `seed`, as
     /// [`Game::determinize`] draws them. For a search that weighs worlds
     /// itself rather than sampling them uniformly.
+    ///
+    /// The check is what the rules guarantee and no more: the seat class.
+    /// Any monster may sit face-down in the monster zone, a level-five-or-
+    /// more one included (a tribute set, a card that sets without
+    /// tributing, an effect that sets it there). Whether an identity is
+    /// *plausible* given the history (no tribute seen, say) is the
+    /// caller's belief to weigh; [`Game::determinize`]'s preference for
+    /// small monsters in those seats is a soft one for the same reason.
     pub fn determinize_with(
         &self,
         viewer: u8,
