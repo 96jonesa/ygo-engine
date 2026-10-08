@@ -177,11 +177,21 @@ impl Game {
     /// pending, the same observation and legal actions for `viewer`, and a
     /// generator seeded from `seed`; a search plays it out from here.
     ///
+    /// `viewer` must be the player the pending question asks, or there must
+    /// be no player's question pending (a chance node, the game's end). The
+    /// world keeps the pending question as it is, and another player's
+    /// question was built from that player's real cards: their menu would
+    /// name identities this world has changed.
+    ///
     /// `seed` is the generator's raw state, so it should be well mixed
     /// ([`crate::rng::expand_seed`] of a counter is): xoshiro's first draws
     /// depend on few of its words, and raw seeds that differ in one word
     /// give correlated samples.
     pub fn determinize(&self, viewer: u8, seed: [u64; 4]) -> Game {
+        debug_assert!(
+            self.asker().is_none_or(|a| a == viewer),
+            "determinize for a viewer the pending question does not ask"
+        );
         let mut rng = Xoshiro256StarStar::new(seed);
         let hidden = self.hidden(viewer);
         let f = self.field();
@@ -259,6 +269,11 @@ impl Game {
         assignment: &[(CardId, u32)],
         seed: [u64; 4],
     ) -> Result<Game, String> {
+        if let Some(a) = self.asker().filter(|&a| a != viewer) {
+            return Err(format!(
+                "the pending question asks player {a}: a world for player {viewer} would keep it as built from the real cards"
+            ));
+        }
         let hidden = self.hidden(viewer);
         let f = self.field();
         let mut by_card: std::collections::HashMap<CardId, u32> = std::collections::HashMap::new();
@@ -306,6 +321,12 @@ impl Game {
         Ok(self.world(viewer, out, &mut rng))
     }
 
+    /// The player the pending question asks, if a player's question is
+    /// pending.
+    fn asker(&self) -> Option<u8> {
+        self.question().and_then(crate::game::asked_player)
+    }
+
     /// Apply an assignment of identities, reshuffle the viewer's own deck
     /// and reseed the generator, all from `rng`.
     fn world(
@@ -341,7 +362,7 @@ mod tests {
     use crate::board::{location, position};
     use crate::cards::{card_data, POOL};
     use crate::driver::RandomPolicy;
-    use crate::game::{Actor, Config};
+    use crate::game::{Action, Actor, Config};
     use std::collections::BTreeMap;
 
     fn pool_deck(game: u64) -> Vec<CardData> {
@@ -625,6 +646,23 @@ mod tests {
             }
         }
 
+        /// **A world is built only for the player the question asks.** For
+        /// the other player the pending question would keep the asker's real
+        /// offers; the call is refused.
+        #[test]
+        fn refuses_a_viewer_the_question_does_not_ask() {
+            for (g, p) in positions() {
+                let other = 1 - p;
+                let truth: Vec<(CardId, u32)> = g
+                    .hidden(other)
+                    .cards()
+                    .map(|c| (c, g.field().cards[c].data.code))
+                    .collect();
+                let e = refused(g.determinize_with(other, &truth, [2, 2, 2, 2]));
+                assert!(e.contains("pending question asks"), "{e}");
+            }
+        }
+
         /// **Anything but a legal completion is refused**: a card left out,
         /// a card named twice, a card the viewer can identify, a code
         /// outside the hidden multiset, and a seat given an identity it
@@ -698,6 +736,94 @@ mod tests {
                 "no position had a face-down monster to test"
             );
         }
+    }
+
+    /// **Whether the other player had a response, and declined, leaves no
+    /// trace.** A world sampled for the player to act differs from the real
+    /// game only in what that player cannot see, so the other player may
+    /// hold a response in one and not the other. The same move is made in
+    /// both; then, while the other player is asked, they decline every
+    /// response window offered (in the game without the response the
+    /// window is never asked: a window with nothing to do is answered for
+    /// them). When both reach the first player's next decision, that
+    /// player's key is the same: being asked, and declining, is not seen.
+    #[test]
+    fn a_declined_window_leaves_no_trace() {
+        // Advance to `viewer`'s next decision, declining every window the
+        // other player is offered. None if anything else intervenes.
+        fn to_next_decision(g: &mut Game, viewer: u8) -> Option<usize> {
+            let mut declined = 0;
+            for _ in 0..64 {
+                match g.player_to_act() {
+                    Actor::Player(p) if p == viewer => return Some(declined),
+                    Actor::Player(_) if g.legal_actions().contains(&Action::Decline) => {
+                        g.apply(&Action::Decline).ok()?;
+                        declined += 1;
+                    }
+                    _ => return None,
+                }
+            }
+            None
+        }
+        let (mut compared, mut asymmetric) = (0, 0);
+        for game in 0..12u64 {
+            let deck = pool_deck(game);
+            let mut g = Game::new([deck.clone(), deck.clone()], [5, 1, 9, game]);
+            let mut rng = RandomPolicy::new(600 + game);
+            for _ in 0..400 {
+                match g.player_to_act() {
+                    Actor::Terminal => break,
+                    Actor::Chance => g.sample_chance().unwrap(),
+                    Actor::Player(v) => {
+                        let l = g.legal_actions();
+                        let a = l[rng.below(l.len())].clone();
+                        let mut w = g
+                            .determinize(v, crate::rng::expand_seed(game * 1000 + compared as u64));
+                        // Only the other player's cards differ: the viewer's
+                        // own deck keeps its real order, so the viewer draws
+                        // the same cards in both.
+                        let order = g.field().players[usize::from(v)].main.clone();
+                        assert!(w.field_mut().set_deck_order(v, &order));
+                        // And the generator: a hand shuffled after a reveal
+                        // rolls it, and the viewer sees their own hand's order.
+                        w.field_mut().rng = g.field().rng.clone();
+                        let mut real = g.clone();
+                        if real.apply(&a).is_ok() && w.apply(&a).is_ok() {
+                            if let (Some(dr), Some(dw)) =
+                                (to_next_decision(&mut real, v), to_next_decision(&mut w, v))
+                            {
+                                // A move can reveal the other player's cards
+                                // (a discard, a look at the hand), and those
+                                // differ between the worlds: a visible
+                                // difference, not a trace. Compare only where
+                                // the same identities were revealed, so the
+                                // hidden multisets still agree.
+                                if real.hidden(v).codes != w.hidden(v).codes {
+                                    g.apply(&a).unwrap();
+                                    continue;
+                                }
+                                assert_eq!(
+                                    real.infoset_key(v),
+                                    w.infoset_key(v),
+                                    "game {game}: the windows declined ({dr} real, {dw} sampled) are seen after {a:?}"
+                                );
+                                compared += 1;
+                                if dr != dw {
+                                    asymmetric += 1;
+                                }
+                            }
+                        }
+                        g.apply(&a).unwrap();
+                    }
+                }
+            }
+        }
+        assert!(compared >= 200, "{compared} comparisons");
+        assert!(
+            asymmetric >= 1,
+            "no case where one game asked and the other did not"
+        );
+        eprintln!("compared {compared}, asymmetric {asymmetric}");
     }
 
     /// **Play continues on a sampled world.** The re-registered scripts

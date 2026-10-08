@@ -1162,7 +1162,7 @@ fn announces_change(m: &Message) -> bool {
 }
 
 /// The player a question is asked of. `None` for the chance questions.
-fn asked_player(m: &Message) -> Option<u8> {
+pub(crate) fn asked_player(m: &Message) -> Option<u8> {
     match m {
         Message::SelectYesNo { player, .. }
         | Message::SelectEffectYesNo { player, .. }
@@ -2787,6 +2787,74 @@ mod observation_tests {
             "one of three, either way"
         );
         assert_ne!(a.infoset_key(1), b.infoset_key(1), "the owner knows which");
+    }
+
+    /// **Another player's question is not seen at all.** Player 1 is asked
+    /// the Main Phase menu, which names their summonable hand cards by
+    /// code. Two worlds whose player-1 hands differ in one card key the
+    /// same for player 0 and differently for player 1; player 0's
+    /// observation has no question, not even that player 1 is choosing
+    /// (being asked at all would tell them player 1 had options).
+    #[test]
+    fn another_players_question_is_not_seen() {
+        use crate::field::IdleOffer;
+        use crate::observation::{observe, Knowledge, PartialView, QuestionView};
+        let world = |second: u32| {
+            let mut f = Field::new(8000);
+            card(&mut f, 0, 11, location::HAND, 0, position::FACEDOWN_DEFENSE);
+            let h: Vec<CardId> = [21, second]
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    card(
+                        &mut f,
+                        1,
+                        c,
+                        location::HAND,
+                        i as u32,
+                        position::FACEDOWN_DEFENSE,
+                    )
+                })
+                .collect();
+            let menu = Message::SelectIdleCmd {
+                player: 1,
+                summonable: h
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| IdleOffer {
+                        code: f.cards[c].data.code,
+                        controller: 1,
+                        location: location::HAND,
+                        sequence: i as u32,
+                    })
+                    .collect(),
+                spsummonable: vec![],
+                repositionable: vec![],
+                msetable: vec![],
+                ssetable: vec![],
+                activatable: vec![],
+                to_bp: true,
+                to_ep: true,
+                can_shuffle: false,
+            };
+            (f, menu)
+        };
+        let (mut fa, qa) = world(22);
+        let (mut fb, qb) = world(23);
+        let k = Knowledge::default();
+        let p = PartialView::default();
+        let (a0, b0) = (
+            observe(&mut fa, &k, Some(&qa), &p, 0),
+            observe(&mut fb, &k, Some(&qb), &p, 0),
+        );
+        assert_eq!(a0.key(), b0.key(), "player 0 does not see player 1's menu");
+        assert_eq!(a0.question, None, "player 0 sees no question");
+        let (a1, b1) = (
+            observe(&mut fa, &k, Some(&qa), &p, 1),
+            observe(&mut fb, &k, Some(&qb), &p, 1),
+        );
+        assert_ne!(a1.key(), b1.key(), "player 1 sees their own menu");
+        assert!(matches!(a1.question, Some(QuestionView::Idle { .. })));
     }
 
     /// **A pending operation's card is the chooser's to know.** Player 0

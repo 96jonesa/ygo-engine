@@ -501,6 +501,27 @@ pub enum QuestionView {
     },
 }
 
+/// The player a question asks, for the questions a player answers (not a
+/// chance question).
+fn question_asker(m: &Message) -> Option<u8> {
+    match m {
+        Message::SelectYesNo { player, .. }
+        | Message::SelectEffectYesNo { player, .. }
+        | Message::SelectOption { player, .. }
+        | Message::SelectCard { player, .. }
+        | Message::SelectUnselectCard { player, .. }
+        | Message::SelectChain { player, .. }
+        | Message::SelectPlace { player, .. }
+        | Message::SelectPosition { player, .. }
+        | Message::SelectIdleCmd { player, .. }
+        | Message::SelectBattleCmd { player, .. }
+        | Message::SelectTribute { player, .. }
+        | Message::AnnounceRace { player, .. }
+        | Message::Sort { player, .. } => Some(*player),
+        _ => None,
+    }
+}
+
 /// The viewer's partial answer, from the `Game`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PartialView {
@@ -834,7 +855,18 @@ pub fn observe(
         subjects,
     };
 
-    let question = question.map(|q| question_view(f, q, partial, &card_ref));
+    // A question is the asker's. Its offers name the asker's own cards (an
+    // idle menu lists the summonable hand cards by code, a chain offer the
+    // set card that would activate), and its partial picks are the asker's
+    // choices so far. The other player sees none of it, not even that a
+    // question is pending: a player is asked only when they have a choice
+    // (a window where they could do nothing is answered for them), so
+    // seeing that they are being asked would tell the other player they
+    // had options.
+    let question = question.and_then(|q| match question_asker(q) {
+        Some(asker) if asker != viewer => None,
+        _ => Some(question_view(f, q, partial, &card_ref)),
+    });
     Observation {
         viewer,
         public,

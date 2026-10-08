@@ -12236,8 +12236,14 @@ it. That last is what separates two states that differ only in which
 hand card a pending set is carrying: at the zone question the card is
 still in hand, so nothing else in the observation tells them apart, yet
 the player who chose it knows which it is. The
-question is projected too, with card identities shown where the viewer
-knows them and the viewer's partial picks alongside.
+question is projected too, for the player it asks: with card identities
+shown where that player knows them, and their partial picks alongside.
+Another player sees nothing of it, not even that it is pending: a player
+is asked only when they have a choice (a window where they could do
+nothing is answered for them), so seeing that they are being asked would
+tell the other player they had options. The offers are the asker's own:
+an idle menu names their summonable hand cards by code, and a chain offer
+names the set card that would activate.
 
 Two representation choices follow from the knowledge model. The
 opponent's hand is a multiset, not a row of slots: nothing strategic
