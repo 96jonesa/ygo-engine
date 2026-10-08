@@ -499,6 +499,53 @@ pub enum QuestionView {
         count: u32,
         settled: usize,
     },
+    /// Another player's question, as a viewer who is not asked sees it:
+    /// who is choosing, and the question's kind.
+    Waiting {
+        player: u8,
+        kind: &'static str,
+    },
+}
+
+/// The player a question asks, for the questions a player answers (not a
+/// chance question).
+fn question_asker(m: &Message) -> Option<u8> {
+    match m {
+        Message::SelectYesNo { player, .. }
+        | Message::SelectEffectYesNo { player, .. }
+        | Message::SelectOption { player, .. }
+        | Message::SelectCard { player, .. }
+        | Message::SelectUnselectCard { player, .. }
+        | Message::SelectChain { player, .. }
+        | Message::SelectPlace { player, .. }
+        | Message::SelectPosition { player, .. }
+        | Message::SelectIdleCmd { player, .. }
+        | Message::SelectBattleCmd { player, .. }
+        | Message::SelectTribute { player, .. }
+        | Message::AnnounceRace { player, .. }
+        | Message::Sort { player, .. } => Some(*player),
+        _ => None,
+    }
+}
+
+/// A question's kind, by name.
+fn question_kind(m: &Message) -> &'static str {
+    match m {
+        Message::SelectYesNo { .. } => "SelectYesNo",
+        Message::SelectEffectYesNo { .. } => "SelectEffectYesNo",
+        Message::SelectOption { .. } => "SelectOption",
+        Message::SelectCard { .. } => "SelectCard",
+        Message::SelectUnselectCard { .. } => "SelectUnselectCard",
+        Message::SelectChain { .. } => "SelectChain",
+        Message::SelectPlace { .. } => "SelectPlace",
+        Message::SelectPosition { .. } => "SelectPosition",
+        Message::SelectIdleCmd { .. } => "SelectIdleCmd",
+        Message::SelectBattleCmd { .. } => "SelectBattleCmd",
+        Message::SelectTribute { .. } => "SelectTribute",
+        Message::AnnounceRace { .. } => "AnnounceRace",
+        Message::Sort { .. } => "Sort",
+        _ => "other",
+    }
 }
 
 /// The viewer's partial answer, from the `Game`.
@@ -834,7 +881,19 @@ pub fn observe(
         subjects,
     };
 
-    let question = question.map(|q| question_view(f, q, partial, &card_ref));
+    // A question is the asker's. Its offers name the asker's own cards (an
+    // idle menu lists the summonable hand cards by code, a chain offer the
+    // set card that would activate), and its partial picks are the asker's
+    // choices so far, none of which the other player sees. The other
+    // player sees only that the asker is choosing, and what kind of
+    // question it is, which the queue skeleton already makes public.
+    let question = question.map(|q| match question_asker(q) {
+        Some(asker) if asker != viewer => QuestionView::Waiting {
+            player: asker,
+            kind: question_kind(q),
+        },
+        _ => question_view(f, q, partial, &card_ref),
+    });
     Observation {
         viewer,
         public,

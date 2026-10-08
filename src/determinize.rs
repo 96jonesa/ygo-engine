@@ -177,11 +177,21 @@ impl Game {
     /// pending, the same observation and legal actions for `viewer`, and a
     /// generator seeded from `seed`; a search plays it out from here.
     ///
+    /// `viewer` must be the player the pending question asks, or there must
+    /// be no player's question pending (a chance node, the game's end). The
+    /// world keeps the pending question as it is, and another player's
+    /// question was built from that player's real cards: their menu would
+    /// name identities this world has changed.
+    ///
     /// `seed` is the generator's raw state, so it should be well mixed
     /// ([`crate::rng::expand_seed`] of a counter is): xoshiro's first draws
     /// depend on few of its words, and raw seeds that differ in one word
     /// give correlated samples.
     pub fn determinize(&self, viewer: u8, seed: [u64; 4]) -> Game {
+        debug_assert!(
+            self.asker().is_none_or(|a| a == viewer),
+            "determinize for a viewer the pending question does not ask"
+        );
         let mut rng = Xoshiro256StarStar::new(seed);
         let hidden = self.hidden(viewer);
         let f = self.field();
@@ -259,6 +269,11 @@ impl Game {
         assignment: &[(CardId, u32)],
         seed: [u64; 4],
     ) -> Result<Game, String> {
+        if let Some(a) = self.asker().filter(|&a| a != viewer) {
+            return Err(format!(
+                "the pending question asks player {a}: a world for player {viewer} would keep it as built from the real cards"
+            ));
+        }
         let hidden = self.hidden(viewer);
         let f = self.field();
         let mut by_card: std::collections::HashMap<CardId, u32> = std::collections::HashMap::new();
@@ -304,6 +319,12 @@ impl Game {
         }
         let mut rng = Xoshiro256StarStar::new(seed);
         Ok(self.world(viewer, out, &mut rng))
+    }
+
+    /// The player the pending question asks, if a player's question is
+    /// pending.
+    fn asker(&self) -> Option<u8> {
+        self.question().and_then(crate::game::asked_player)
     }
 
     /// Apply an assignment of identities, reshuffle the viewer's own deck
@@ -622,6 +643,23 @@ mod tests {
                 let truth = assignment_in(&g, &h);
                 let w = g.determinize_with(p, &truth, [5, 5, 5, 5]).unwrap();
                 assert_eq!(assignment_in(&w, &h), truth);
+            }
+        }
+
+        /// **A world is built only for the player the question asks.** For
+        /// the other player the pending question would keep the asker's real
+        /// offers; the call is refused.
+        #[test]
+        fn refuses_a_viewer_the_question_does_not_ask() {
+            for (g, p) in positions() {
+                let other = 1 - p;
+                let truth: Vec<(CardId, u32)> = g
+                    .hidden(other)
+                    .cards()
+                    .map(|c| (c, g.field().cards[c].data.code))
+                    .collect();
+                let e = refused(g.determinize_with(other, &truth, [2, 2, 2, 2]));
+                assert!(e.contains("pending question asks"), "{e}");
             }
         }
 
