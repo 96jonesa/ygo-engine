@@ -12238,8 +12238,10 @@ still in hand, so nothing else in the observation tells them apart, yet
 the player who chose it knows which it is. The
 question is projected too, for the player it asks: with card identities
 shown where that player knows them, and their partial picks alongside.
-Another player sees only who is choosing and the question's kind (which
-the queue skeleton already makes public). The offers are the asker's own:
+Another player sees nothing of it, not even that it is pending: a player
+is asked only when they have a choice (a window where they could do
+nothing is answered for them), so seeing that they are being asked would
+tell the other player they had options. The offers are the asker's own:
 an idle menu names their summonable hand cards by code, and a chain offer
 names the set card that would activate.
 

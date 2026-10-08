@@ -2789,14 +2789,14 @@ mod observation_tests {
         assert_ne!(a.infoset_key(1), b.infoset_key(1), "the owner knows which");
     }
 
-    /// **Another player's question shows who is choosing, not the
-    /// offers.** Player 1 is asked the Main Phase menu, which names their
-    /// summonable hand cards by code. Two worlds whose player-1 hands differ
-    /// in one card key the same for player 0 (the menu is player 1's) and
-    /// differently for player 1; player 0 sees only that player 1 is at the
-    /// menu.
+    /// **Another player's question is not seen at all.** Player 1 is asked
+    /// the Main Phase menu, which names their summonable hand cards by
+    /// code. Two worlds whose player-1 hands differ in one card key the
+    /// same for player 0 and differently for player 1; player 0's
+    /// observation has no question, not even that player 1 is choosing
+    /// (being asked at all would tell them player 1 had options).
     #[test]
-    fn another_players_question_shows_who_is_choosing_not_the_offers() {
+    fn another_players_question_is_not_seen() {
         use crate::field::IdleOffer;
         use crate::observation::{observe, Knowledge, PartialView, QuestionView};
         let world = |second: u32| {
@@ -2848,13 +2848,7 @@ mod observation_tests {
             observe(&mut fb, &k, Some(&qb), &p, 0),
         );
         assert_eq!(a0.key(), b0.key(), "player 0 does not see player 1's menu");
-        assert_eq!(
-            a0.question,
-            Some(QuestionView::Waiting {
-                player: 1,
-                kind: "SelectIdleCmd"
-            })
-        );
+        assert_eq!(a0.question, None, "player 0 sees no question");
         let (a1, b1) = (
             observe(&mut fa, &k, Some(&qa), &p, 1),
             observe(&mut fb, &k, Some(&qb), &p, 1),
